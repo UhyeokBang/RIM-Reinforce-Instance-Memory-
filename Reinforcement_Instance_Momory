@@ -1,0 +1,99 @@
+import gym
+import numpy as np
+from stable_baselines3 import PPO
+from stable_baselines3.common.envs import DummyVecEnv
+from gym import spaces
+
+# Custom Environment for Instance Memory Management
+class InstanceMemoryEnv(gym.Env):
+    def __init__(self, n_instances=5):
+        super(InstanceMemoryEnv, self).__init__()
+        self.n_instances = n_instances
+        
+        # Define the action and observation space
+        # Action space: Increase or decrease instance view allocation for each instance
+        self.action_space = spaces.MultiDiscrete([3] * n_instances)  # 0: Decrease, 1: No change, 2: Increase
+        
+        # Observation space: Current allocation status for each instance and user request info
+        # For simplicity, we assume each instance has the following state:
+        # [current_views, max_views, difficulty, user_request_weight]
+        self.observation_space = spaces.Box(low=0, high=10, shape=(n_instances, 4), dtype=np.float32)
+        
+        # Initialize state
+        self.state = np.zeros((n_instances, 4))
+        
+        # Set instance difficulty and user request weight (for simplicity, fixed values)
+        self.instance_difficulty = np.random.rand(n_instances) * 5  # Difficulty range: 0 to 5
+        self.user_request_weight = np.random.rand(n_instances) * 5  # Request weight range: 0 to 5
+
+        # Set initial view allocations
+        self.current_views = np.random.randint(1, 5, size=n_instances)  # Initial views between 1 and 4
+        self.max_views = 10  # Max views allowed for any instance
+
+    def reset(self):
+        # Reset state at the beginning of each episode
+        self.current_views = np.random.randint(1, 5, size=self.n_instances)
+        self.state = np.stack((self.current_views, [self.max_views] * self.n_instances, 
+                               self.instance_difficulty, self.user_request_weight), axis=1)
+        return self.state
+
+    def step(self, action):
+        # Apply the actions: Increase/Decrease the view allocation
+        reward = 0
+        for i in range(self.n_instances):
+            if action[i] == 0:  # Decrease views
+                self.current_views[i] = max(1, self.current_views[i] - 1)
+            elif action[i] == 2:  # Increase views
+                self.current_views[i] = min(self.max_views, self.current_views[i] + 1)
+        
+        # Update state
+        self.state[:, 0] = self.current_views
+
+        # Calculate reward
+        for i in range(self.n_instances):
+            # Reward if the allocation matches the difficulty and user request weight
+            if self.current_views[i] >= self.instance_difficulty[i] and \
+               self.current_views[i] >= self.user_request_weight[i]:
+                reward += 1  # Correct allocation reward
+            
+            # Penalty if views are over-allocated or under-allocated based on difficulty
+            if self.current_views[i] > self.instance_difficulty[i] + 2:
+                reward -= 1  # Over-allocation penalty
+            elif self.current_views[i] < self.instance_difficulty[i] - 2:
+                reward -= 1  # Under-allocation penalty
+
+        # Determine if episode is done
+        done = False
+        if np.random.rand() < 0.1:  # Random chance of termination (can be based on actual criteria)
+            done = True
+
+        # Return next state, reward, done flag, and additional info
+        return self.state, reward, done, {}
+
+    def render(self, mode='human'):
+        # Print the current state and allocation
+        print(f"Current Views: {self.current_views}")
+        print(f"State: {self.state}")
+
+
+# Create the environment
+env = DummyVecEnv([lambda: InstanceMemoryEnv(n_instances=5)])
+
+# Create the PPO model
+model = PPO("MlpPolicy", env, verbose=1)
+
+# Train the model
+model.learn(total_timesteps=10000)
+
+# Save the trained model
+model.save("instance_memory_model")
+
+# Load the model (for future use)
+model = PPO.load("instance_memory_model")
+
+# Evaluate the model
+obs = env.reset()
+for _ in range(10):
+    action, _states = model.predict(obs, deterministic=True)
+    obs, reward, done, info = env.step(action)
+    env.render()
